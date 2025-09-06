@@ -1,12 +1,51 @@
 # saas/admin.py
-from django import forms
 from django.contrib import admin
 from django.core.exceptions import ValidationError
 from django.forms.models import BaseInlineFormSet
-from django.contrib.auth import get_user_model
-from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 
-from .models import Project, Module, ProjectModule, Membership, ProjectRole
+from django.contrib.auth.models import User, Group
+from django.contrib.auth.admin import UserAdmin, GroupAdmin
+
+from .models import (
+    Project, Module, ProjectModule, Membership, ProjectRole,
+    # proxies definidos en models.py
+    AdminUser, AdminGroup,
+)
+
+# ------------------------------
+#  Mantener User/Group registrados (para autocompletes)
+#  pero ocultos del dashboard
+# ------------------------------
+try:
+    admin.site.unregister(User)
+except admin.sites.NotRegistered:
+    pass
+
+try:
+    admin.site.unregister(Group)
+except admin.sites.NotRegistered:
+    pass
+
+
+@admin.register(User)
+class HiddenUserAdmin(UserAdmin):
+    """Necesario para autocompletes; se oculta en el index."""
+    def has_module_permission(self, request):
+        return False
+
+
+@admin.register(Group)
+class HiddenGroupAdmin(GroupAdmin):
+    """Necesario para permisos; se oculta en el index."""
+    def has_module_permission(self, request):
+        return False
+
+
+# ------------------------------
+#  Proxies visibles bajo SAAS
+# ------------------------------
+admin.site.register(AdminUser, UserAdmin)
+admin.site.register(AdminGroup, GroupAdmin)
 
 
 # ========= helpers de permisos (grupos) =========
@@ -20,26 +59,8 @@ def user_is_platform_admin(user) -> bool:
     return user.groups.filter(name__in=ALLOWED_GROUPS).exists()
 
 
-# ========= Admin oculto para User (necesario para autocomplete) =========
-User = get_user_model()
-
-@admin.register(User)
-class HiddenUserAdmin(DjangoUserAdmin):
-    """
-    Registramos el admin de User para habilitar autocomplete_fields,
-    pero lo ocultamos del menú del admin.
-    """
-    # El DjangoUserAdmin ya define search_fields adecuados.
-    def has_module_permission(self, request):
-        return False
-
-
 # ========= INLINES =========
-
 class ProjectModuleInline(admin.TabularInline):
-    """
-    Módulos asignados al proyecto (encender/apagar).
-    """
     model = ProjectModule
     extra = 0
     autocomplete_fields = ["module"]
@@ -48,9 +69,6 @@ class ProjectModuleInline(admin.TabularInline):
 
 
 class MembershipInlineFormSet(BaseInlineFormSet):
-    """
-    Valida que siempre quede al menos un OWNER.
-    """
     def clean(self):
         super().clean()
         owners = 0
@@ -69,10 +87,6 @@ class MembershipInlineFormSet(BaseInlineFormSet):
 
 
 class MembershipInline(admin.TabularInline):
-    """
-    Miembros del proyecto y sus roles.
-    Solo GodAdmin/SuperAdmin pueden cambiar roles/eliminar.
-    """
     model = Membership
     formset = MembershipInlineFormSet
     extra = 0
@@ -91,15 +105,8 @@ class MembershipInline(admin.TabularInline):
 
 
 # ========= ADMINS =========
-
 @admin.register(Project)
 class ProjectAdmin(admin.ModelAdmin):
-    """
-    Pantalla principal: Projects.
-    - Lista proyectos sin repetir (uno por fila).
-    - Inlines: módulos y miembros/roles.
-    - Seguridad: sólo GodAdmin/SuperAdmin pueden cambiar.
-    """
     inlines = [ProjectModuleInline, MembershipInline]
 
     list_display = ("name", "slug", "owners_display", "modules_enabled_display", "members_count")
@@ -120,9 +127,7 @@ class ProjectAdmin(admin.ModelAdmin):
         return ", ".join(pm.module.name for pm in qs)
     modules_enabled_display.short_description = "Módulos ON"
 
-    # --- permisos en admin ---
     def has_module_permission(self, request):
-        # que todos puedan VER el módulo Projects en el menú del admin
         return request.user.is_authenticated
 
     def has_view_permission(self, request, obj=None):
@@ -140,25 +145,13 @@ class ProjectAdmin(admin.ModelAdmin):
 
 @admin.register(Module)
 class ModuleAdmin(admin.ModelAdmin):
-    """
-    Catálogo de módulos del sistema (Inventario, Reportes, etc.)
-    Si quieres ocultarlo del menú, descomenta has_module_permission().
-    """
     list_display = ("code", "name")
     search_fields = ("code", "name")
     ordering = ("code",)
 
-    # Para ocultar del menú pero seguir registrado (autocomplete):
-    # def has_module_permission(self, request):
-    #     return False
-
 
 @admin.register(ProjectModule)
 class ProjectModuleAdmin(admin.ModelAdmin):
-    """
-    Lo ocultamos del menú para evitar duplicar pantallas.
-    Sigue accesible desde el inline dentro de Project.
-    """
     list_display = ("project", "module", "enabled")
     autocomplete_fields = ["project", "module"]
 
@@ -168,9 +161,6 @@ class ProjectModuleAdmin(admin.ModelAdmin):
 
 @admin.register(Membership)
 class MembershipAdmin(admin.ModelAdmin):
-    """
-    Lo ocultamos del menú. Gestión desde Project (inline).
-    """
     list_display = ("project", "user", "role", "created_at")
     search_fields = ("project__name", "user__username", "user__email")
     autocomplete_fields = ["project", "user"]
