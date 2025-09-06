@@ -1,0 +1,13 @@
+{% extends "admin/base.html" %}
+{% load static %}
+
+{% block title %}Administración de Django{% endblock %}
+
+{# CSS para ocultar el bloque del app `auth` en índice y barra lateral #}
+{% block extrastyle %}
+  {{ block.super }}
+  <style>
+    /* Oculta el grupo "auth" por completo (index + sidebar) */
+    #app-auth { display: none !important; }
+  </style>
+{% endblock %}

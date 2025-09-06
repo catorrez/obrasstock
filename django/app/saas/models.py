@@ -1,68 +1,100 @@
-from django.contrib import admin
-from django.contrib.auth.admin import UserAdmin, GroupAdmin
+from django.db import models
 from django.contrib.auth.models import User, Group
 
-from .models import Project, Module, ProjectModule, Membership, ProjectRole
-from .models import AdminUser, AdminGroup  # <— los proxies
 
-# 1) Quitar los User/Group originales para que NO aparezcan en “Autenticación y autorización”
-try:
-    admin.site.unregister(User)
-except admin.sites.NotRegistered:
-    pass
-try:
-    admin.site.unregister(Group)
-except admin.sites.NotRegistered:
-    pass
+class Module(models.Model):
+    code = models.SlugField(max_length=50, unique=True)
+    name = models.CharField(max_length=100)
 
-# 2) Registrar los proxies bajo la app “saas” (quedarán en la sección SAAS)
-@admin.register(AdminUser)
-class AdminUserProxyAdmin(UserAdmin):
-    # puedes personalizar list_display, search_fields, etc. si quieres
-    pass
+    class Meta:
+        verbose_name = "Module"
+        verbose_name_plural = "Modules"
+        ordering = ("code",)
 
-@admin.register(AdminGroup)
-class AdminGroupProxyAdmin(GroupAdmin):
-    pass
+    def __str__(self) -> str:
+        return self.name
 
-# 3) Resto de tus admins (asegúrate de NO bloquearlos con has_module_permission=False)
-class ProjectModuleInline(admin.TabularInline):
-    model = ProjectModule
-    extra = 0
-    autocomplete_fields = ["module"]
-    fields = ("module", "enabled")
-    show_change_link = True
 
-class MembershipInline(admin.TabularInline):
-    model = Membership
-    extra = 0
-    autocomplete_fields = ["user"]
-    fields = ("user", "role", "created_at")
-    readonly_fields = ("created_at",)
+class Project(models.Model):
+    name = models.CharField(max_length=150, unique=True)
+    slug = models.SlugField(max_length=80, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
 
-@admin.register(Project)
-class ProjectAdmin(admin.ModelAdmin):
-    inlines = [ProjectModuleInline, MembershipInline]
-    list_display = ("name", "slug")
-    search_fields = ("name", "slug")
+    class Meta:
+        ordering = ("name",)
 
-@admin.register(Module)
-class ModuleAdmin(admin.ModelAdmin):
-    list_display = ("code", "name")
-    search_fields = ("code", "name")
+    def __str__(self) -> str:
+        return self.name
 
-# Estos dos se gestionan como auxiliares; si no quieres que aparezcan en el menú, ocúltalos:
-@admin.register(ProjectModule)
-class ProjectModuleAdmin(admin.ModelAdmin):
-    list_display = ("project", "module", "enabled")
-    autocomplete_fields = ["project", "module"]
-    def has_module_permission(self, request):
-        return False  # se administran desde el inline en Project
 
-@admin.register(Membership)
-class MembershipAdmin(admin.ModelAdmin):
-    list_display = ("project", "user", "role", "created_at")
-    search_fields = ("project__name", "user__username", "user__email")
-    autocomplete_fields = ["project", "user"]
-    def has_module_permission(self, request):
-        return False  # se administran desde el inline en Project
+class ProjectModule(models.Model):
+    project = models.ForeignKey(Project, related_name="project_modules", on_delete=models.CASCADE)
+    module  = models.ForeignKey(Module,  related_name="project_modules", on_delete=models.CASCADE)
+    enabled = models.BooleanField(default=True)
+
+    class Meta:
+        verbose_name = "Project module"
+        verbose_name_plural = "Project modules"
+        unique_together = (("project", "module"),)
+
+    def __str__(self) -> str:
+        return f"{self.project} · {self.module}"
+
+
+class ProjectRole(models.IntegerChoices):
+    VIEWER = 10, "viewer"
+    EDITOR = 20, "editor"
+    ADMIN  = 30, "admin"
+    OWNER  = 40, "owner"
+
+
+class Membership(models.Model):
+    project = models.ForeignKey(Project, related_name="memberships", on_delete=models.CASCADE)
+    user    = models.ForeignKey(User,    related_name="project_memberships", on_delete=models.CASCADE)
+    role    = models.PositiveSmallIntegerField(choices=ProjectRole.choices, default=ProjectRole.VIEWER)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Membership"
+        verbose_name_plural = "Memberships"
+        unique_together = (("project", "user"),)
+        ordering = ("-created_at",)
+
+    def __str__(self) -> str:
+        return f"{self.user} → {self.project} ({self.get_role_display()})"
+
+
+class Invite(models.Model):
+    """Invitaciones a un proyecto (lo usan las vistas)."""
+    project = models.ForeignKey(Project, related_name="invites", on_delete=models.CASCADE)
+    # Se puede invitar por email o asociar a un usuario existente
+    email   = models.EmailField(blank=True, null=True)
+    user    = models.ForeignKey(User, related_name="project_invites", on_delete=models.SET_NULL, blank=True, null=True)
+    token   = models.CharField(max_length=64, unique=True)
+    role    = models.PositiveSmallIntegerField(choices=ProjectRole.choices, default=ProjectRole.VIEWER)
+    accepted = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+
+    def __str__(self) -> str:
+        who = self.email or (self.user and self.user.username) or "invite"
+        return f"{who} → {self.project} ({self.get_role_display()})"
+
+
+# Proxies para mover “Usuarios” y “Grupos” a SAAS en el admin
+class AdminUser(User):
+    class Meta:
+        proxy = True
+        app_label = "saas"
+        verbose_name = "Usuarios (admin)"
+        verbose_name_plural = "Usuarios (admin)"
+
+
+class AdminGroup(Group):
+    class Meta:
+        proxy = True
+        app_label = "saas"
+        verbose_name = "Grupos (admin)"
+        verbose_name_plural = "Grupos (admin)"
